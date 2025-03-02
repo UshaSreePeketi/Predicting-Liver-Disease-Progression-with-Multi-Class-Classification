@@ -1,0 +1,421 @@
+---
+title: "Predicting Liver Disease Progression Using Multi-Class Classification Models  "
+output: html_document
+date: "2024-12-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(pROC)
+library(nnet)
+library(entropy)
+library(class)
+
+```
+
+Loading Data :
+
+```{r pressure, echo=FALSE}
+data <- read.csv("C:\\Users\\atlur\\OneDrive\\Desktop\\UB\\Stats\\project\\Data.csv")
+head(data, 5)
+str(data)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+Encode categorical variables
+
+```{r}
+data$Status <- as.factor(data$Status)  # Target variable
+categorical_cols <- c("Drug", "Sex", "Ascites", "Hepatomegaly", "Spiders", "Edema")
+```
+
+```{r}
+# 1. Data Exploration -------------------------------------------------
+# Check the structure of the dataset
+str(data)
+library(ggplot2)
+# Summary of the dataset
+cat("\nSummary of Dataset:\n")
+summary(data)
+
+# 2. Missing Values in Dataset --------------------------------------
+cat("\nMissing values in each column:\n")
+missing_values <- colSums(is.na(data))
+print(missing_values)
+
+# Visualize missing values (optional)
+library(Amelia)
+missmap(data, main = "Missing Values Map")
+
+# 3. Distribution of Categorical Variables ----------------------------
+# Check the distribution of categorical variables (e.g., Sex, Ascites)
+cat("\nDistribution of 'Sex' variable:\n")
+print(table(data$Sex))
+
+cat("\nDistribution of 'Ascites' variable:\n")
+print(table(data$Ascites))
+
+# Plot Bar Graphs for Categorical Variables
+ggplot(data, aes(x = Sex)) +
+  geom_bar(fill = "skyblue") +
+  ggtitle("Distribution of Sex") +
+  theme_minimal()
+
+ggplot(data, aes(x = Ascites)) +
+  geom_bar(fill = "lightgreen") +
+  ggtitle("Distribution of Ascites") +
+  theme_minimal()
+
+# 4. Numeric Variables Summary --------------------------------------
+# Check the summary statistics for numeric variables
+numeric_cols <- sapply(data, is.numeric)
+data_numeric <- data[, numeric_cols]
+
+cat("\nSummary of Numeric Variables:\n")
+summary(data_numeric)
+
+# 5. Visualize Distribution of Numeric Variables -------------------
+# Histogram of a numeric variable (e.g., Age)
+ggplot(data, aes(x = Age)) +
+  geom_histogram(binwidth = 500, fill = "lightcoral", color = "black", alpha = 0.7) +
+  ggtitle("Distribution of Age") +
+  theme_minimal()
+
+# Boxplot for a numeric variable (e.g., Bilirubin)
+ggplot(data, aes(x = factor(0), y = Bilirubin)) +
+  geom_boxplot(fill = "lightblue") +
+  ggtitle("Boxplot of Bilirubin") +
+  theme_minimal()
+
+# 6. Correlation Between Numeric Variables ------------------------
+# Correlation heatmap (only numeric variables)
+corr_matrix <- cor(data_numeric, use = "complete.obs")
+library(reshape2)
+corr_melt <- melt(corr_matrix)
+ggplot(corr_melt, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1)) +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap of Numeric Variables")
+
+# 7. Check for Duplicates -------------------------------------------
+cat("\nCheck for duplicate rows:\n")
+duplicates <- sum(duplicated(data))
+cat("Number of duplicate rows:", duplicates, "\n")
+
+# If duplicates exist, you can remove them
+if (duplicates > 0) {
+  data <- data[!duplicated(data), ]
+  cat("Duplicates removed.\n")
+}
+
+# 8. Final Check of the Dataset After Exploration -------------------
+cat("\nSummary of Dataset After Exploration:\n")
+summary(data)
+
+# Check structure again after exploration
+str(data)
+```
+
+```{r}
+# Add "CL" as a level to the 'Status' factor
+levels(data$Status) <- c(levels(data$Status), "CL")
+
+# Re-encode all NA values in the 'Status' column as 'CL'
+data$Status[is.na(data$Status)] <- "CL"
+
+# Verify the changes
+table(data$Status)
+
+
+```
+
+```{r}
+# Load the necessary libraries
+library(corrplot)
+
+# Select only the numeric columns for correlation
+numeric_data <- data[sapply(data, is.numeric)]
+
+# Compute the correlation matrix
+cor_matrix <- cor(numeric_data, use = "complete.obs")  # use = "complete.obs" excludes NA values
+
+# Display the correlation matrix
+print(cor_matrix)
+
+# Visualize the correlation matrix using a heatmap
+corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 0.8, addCoef.col = "black")
+```
+
+```{r}
+# Convert 'Status' to numeric (if needed)
+data$Status_num <- as.numeric(data$Status)
+
+# Create the linear regression model using lm
+lm_model_status <- lm(Status_num ~ Age + Bilirubin + Cholesterol + Albumin + Copper + Alk_Phos + SGOT + 
+                      Tryglicerides + Platelets + Prothrombin + Stage + Sex + Ascites + Hepatomegaly + Spiders + Edema, 
+                      data = data)
+
+# Summary of the linear regression model
+summary(lm_model_status)
+
+# Calculate Cook's Distance
+# Calculate Cook's Distance for the linear regression model
+cooks_dist <- cooks.distance(lm_model_status)
+
+# View the first few Cook's Distance values
+head(cooks_dist)
+
+# Find the number of data points (n)
+n <- nrow(data)  
+
+# Threshold for identifying influential points (4/n)
+threshold <- 4 / n  
+print(paste("Threshold for influential points (4/n):", threshold))
+
+# Find influential points where Cook's Distance is greater than the threshold
+influential_points <- which(cooks_dist > threshold)
+
+# Print indices of influential points
+cat("Influential Points Indices:\n")
+print(influential_points)
+
+# Visualize Cook's Distance with a plot
+plot(cooks_dist, type = "h", main = "Cook's Distance", ylab = "Cook's Distance", xlab = "Observation Index")
+abline(h = threshold, col = "red", lty = 2)  # Threshold line
+
+# Optionally, label the influential points on the plot
+text(influential_points, cooks_dist[influential_points], labels = influential_points, pos = 4, col = "blue", cex = 0.7)
+
+# Check the data for the influential points
+cat("Influential Points Data:\n")
+print(data[influential_points, ])
+
+
+```
+
+```{r}
+influential_indices <- c(3, 60, 61, 151, 171, 195, 211, 223, 225, 249, 259, 
+                         308, 309, 319, 399, 422, 453, 491, 495, 512, 516, 
+                         524, 528, 537, 541, 580, 602, 603, 614, 644, 656, 
+                         668, 671, 692, 702, 703, 736, 742, 777, 781, 814, 
+                         849, 851, 893, 908, 918, 919, 943, 962, 970, 987, 
+                         1005, 1008, 1046, 1104, 1115, 1123, 1186, 1207, 
+                         1218, 1231, 1245, 1253, 1291, 1297, 1304, 1318, 
+                         1325, 1331, 1345, 1347, 1352, 1367, 1407, 1411, 
+                         1426, 1433, 1458, 1459, 1471, 1475, 1553, 1560, 
+                         1579, 1597, 1608, 1610, 1669, 1680, 1690, 1710, 
+                         1722, 1739, 1793, 1805, 1817, 1821, 1862, 1873, 
+                         1886, 1894, 1896, 1910, 1913, 1917, 1924, 1946, 
+                         1951, 1963, 1964, 2012, 2028, 2041, 2051, 2057, 
+                         2063, 2070, 2137, 2149, 2179, 2182, 2207, 2300, 
+                         2307, 2327, 2338, 2339, 2348, 2360, 2361, 2439, 
+                         2442, 2445, 2450, 2455, 2473, 2484, 2500, 2503, 
+                         2506, 2568, 2578, 2603, 2648, 2653, 2690, 2722, 
+                         2725, 2748, 2767, 2805, 2860, 2893, 2910, 2915, 
+                         2933, 2953, 2957, 2963, 2964, 2974, 3025, 3041, 
+                         3065, 3079, 3100, 3102, 3137, 3188, 3203, 3229, 
+                         3335, 3342, 3359, 3428, 3479, 3484, 3485, 3496, 
+                         3500, 3503, 3509, 3516, 3545, 3565, 3592, 3594, 
+                         3630, 3685, 3712, 3722, 3726, 3742, 3808, 3815, 
+                         3838, 3859, 3863, 3907, 3986, 3996, 4014, 4052, 
+                         4087, 4134, 4136, 4228, 4251, 4268, 4270, 4279, 
+                         4286, 4321, 4324, 4376, 4381, 4392, 4414, 4415, 
+                         4449, 4461, 4516, 4517, 4522, 4537, 4558, 4565, 
+                         4580, 4591, 4595, 4608, 4653, 4656, 4662, 4683, 
+                         4711, 4740, 4789, 4833, 4838, 4840, 4853, 4874, 
+                         4901, 4906, 4927, 4953, 4994, 5023, 5029, 5038, 
+                         5121, 5128, 5129, 5132, 5145, 5148, 5149, 5159, 
+                         5181, 5228, 5256, 5265, 5325, 5352, 5367, 5388, 
+                         5404, 5437, 5439, 5442, 5511, 5525, 5531, 5596, 
+                         5630, 5641, 5666, 5679, 5726, 5738, 5769, 5770, 
+                         5778, 5783, 5860, 5899, 5926, 5973, 5979, 6020, 
+                         6037, 6072, 6102, 6123, 6180, 6183, 6200, 6202, 
+                         6210, 6218, 6299, 6327, 6341, 6347, 6391, 6392, 
+                         6415, 6423, 6428, 6432, 6453, 6455, 6479, 6491, 
+                         6505, 6552, 6559, 6566, 6567, 6572, 6581, 6585, 
+                         6636, 6643, 6644, 6665, 6674, 6680, 6681, 6694, 
+                         6727, 6739, 6747, 6762, 6766, 6788, 6805, 6811, 
+                         6822, 6830, 6836, 6848, 6878, 6995, 7006, 7029, 
+                         7040, 7060, 7083, 7097, 7098, 7141, 7154, 7159, 
+                         7161, 7183, 7217, 7226, 7237, 7243, 7263, 7287, 
+                         7329, 7331, 7355, 7357, 7403, 7439, 7509, 7550, 
+                         7553, 7556, 7593, 7608, 7617, 7625, 7634, 7638, 
+                         7641, 7697, 7715, 7736, 7802, 7876, 7904)
+
+# Subset the data for these influential points
+influential_data <- data[influential_indices, ]
+
+# View the influential points' data
+head(influential_data)  
+```
+
+Split the cleaned data into features (X) and target (y)
+
+```{r}
+X <- data[, !(names(data) %in% c("id", "Status"))]
+y <- data$Status
+
+set.seed(42)
+train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+```
+
+Step 1: Logistic Regression with Probability Predictions
+
+```{r}
+logistic_model <- multinom(Status ~ ., data = train_data)
+logistic_probs <- predict(logistic_model, newdata = test_data, type = "probs")  
+logistic_preds <- apply(logistic_probs, 1, which.max)
+logistic_preds <- factor(colnames(logistic_probs)[logistic_preds], levels = levels(test_data$Status))
+```
+
+step 2: Random Forest Model
+
+```{r}
+
+set.seed(42)
+rf_model <- randomForest(
+  Status ~ .,                  # Formula: predict 'Status' using all other variables
+  data = train_data,           # Training dataset
+  ntree = 100,                 # Number of trees
+  importance = TRUE            # Calculate feature importance
+)
+```
+
+Predict probabilities and class labels for Random Forest
+
+```{r}
+rf_probs <- predict(rf_model, newdata = test_data, type = "prob")  # Probabilities
+rf_preds <- apply(rf_probs, 1, which.max)
+rf_preds <- factor(colnames(rf_probs)[rf_preds], levels = levels(test_data$Status))
+```
+
+Step 3: XGBoost Model
+
+```{r}
+
+train_matrix <- model.matrix(Status ~ ., data = train_data)[, -1]
+test_matrix <- model.matrix(Status ~ ., data = test_data)[, -1]
+dtrain <- xgb.DMatrix(data = train_matrix, label = as.numeric(train_data$Status) - 1)
+dtest <- xgb.DMatrix(data = test_matrix, label = as.numeric(test_data$Status) - 1)
+
+xgb_model <- xgboost(data = dtrain, max_depth = 6, eta = 0.3, nrounds = 100, objective = "multi:softprob", 
+                     num_class = length(levels(train_data$Status)), verbose = 0)
+xgb_probs <- predict(xgb_model, newdata = dtest)  # Probabilities as a matrix
+xgb_probs <- matrix(xgb_probs, ncol = length(levels(train_data$Status)), byrow = TRUE)
+xgb_preds <- apply(xgb_probs, 1, which.max)
+xgb_preds <- factor(levels(train_data$Status)[xgb_preds], levels = levels(test_data$Status))
+```
+
+Function to Calculate Entropy (Uncertainty)
+
+```{r}
+calculate_entropy <- function(probs) {
+  apply(probs, 1, function(p) -sum(p * log(p + 1e-9)))  # Add small value to avoid log(0)
+}
+```
+
+Calculate Uncertainty Scores
+
+```{r}
+logistic_uncertainty <- calculate_entropy(logistic_probs)
+rf_uncertainty <- calculate_entropy(rf_probs)
+xgb_uncertainty <- calculate_entropy(xgb_probs)
+```
+
+Combine Results into a Data Frame for Analysis
+
+```{r}
+results <- data.frame(
+  Actual = test_data$Status,
+  Logistic_Prediction = logistic_preds,
+  Logistic_Uncertainty = logistic_uncertainty,
+  RF_Prediction = rf_preds,
+  RF_Uncertainty = rf_uncertainty,
+  XGB_Prediction = xgb_preds,
+  XGB_Uncertainty = xgb_uncertainty
+)
+```
+
+View Results
+
+```{r}
+head(results)
+
+```
+
+Evaluate Models
+
+```{r}
+
+# Evaluating Models based on uncertainity
+evaluate_uncertainty <- function(predictions, uncertainty, actual, model_name) {
+  cat("=== ", model_name, " ===\n")
+  print(confusionMatrix(predictions, actual))
+  cat("Average Uncertainty:", mean(uncertainty, na.rm = TRUE), "\n")
+  cat("\n")
+}
+
+evaluate_uncertainty(logistic_preds, logistic_uncertainty, test_data$Status, "Logistic Regression")
+evaluate_uncertainty(rf_preds, rf_uncertainty, test_data$Status, "Random Forest")
+evaluate_uncertainty(xgb_preds, xgb_uncertainty, test_data$Status, "XGBoost")
+
+```
+
+Define Multi-Class Log Loss Function
+
+```{r}
+calculate_log_loss <- function(y_true, y_prob) {
+  # y_true: Actual classes (factor)
+  # y_prob: Predicted probabilities (matrix or data frame)
+  eps <- 1e-15  # Small value to avoid log(0)
+  y_prob <- pmax(pmin(y_prob, 1 - eps), eps)  # Clip probabilities to [eps, 1-eps]
+  
+  # One-hot encode true labels
+  y_true_onehot <- model.matrix(~ y_true - 1)
+  
+  # Compute log loss
+  log_loss <- -mean(rowSums(y_true_onehot * log(y_prob)))
+  return(log_loss)
+}
+```
+
+Calculate Log Loss for Each Model
+
+```{r}
+logistic_log_loss <- calculate_log_loss(test_data$Status, logistic_probs)
+rf_log_loss <- calculate_log_loss(test_data$Status, rf_probs)
+xgb_log_loss <- calculate_log_loss(test_data$Status, xgb_probs)
+```
+
+Display Log Loss for Each Model
+
+```{r}
+cat("Log Loss (Logistic Regression):", logistic_log_loss, "\n")
+cat("Log Loss (Random Forest):", rf_log_loss, "\n")
+cat("Log Loss (XGBoost):", xgb_log_loss, "\n")
+```
+
+Visualize Feature Importance for Random Forest
+
+```{r}
+varImpPlot(rf_model, main = "Feature Importance - Random Forest")
+
+```

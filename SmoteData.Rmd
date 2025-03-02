@@ -1,0 +1,112 @@
+---
+title: "Predicting Liver Disease Progression Using Multi-Class Classification Models- SMOTE"
+output: html_document
+date: "2024-12-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This R Markdown document evaluates multiple machine learning models and preprocessing techniques.
+
+```{r libraries}
+library(ggplot2)
+library(caret)
+library(randomForest)
+library(xgboost)
+library(pROC)
+library(nnet)
+library(entropy)
+library(class)
+library(MASS)
+library(gbm)
+library(smotefamily)
+```
+
+### Data Loading and Exploration
+
+```{r data_loading}
+data <- read.csv("C:\\Users\\atlur\\OneDrive\\Desktop\\UB\\Stats\\project\\Data.csv")
+str(data)
+
+# Converting categorical columns to factors
+data$Status <- as.factor(data$Status)
+categorical_cols <- c("Drug", "Sex", "Ascites", "Hepatomegaly", "Spiders", "Edema")
+data[categorical_cols] <- lapply(data[categorical_cols], as.factor)
+```
+
+### Data Preparation
+
+```{r data_preparation}
+# Train and test splitting
+set.seed(32)
+train_index <- createDataPartition(data$Status, p = 0.5, list = FALSE)
+train_data <- data[train_index, ]
+test_data <- data[-train_index, ]
+
+# Encoding dummy variables
+dummy_model <- dummyVars(~ ., data = train_data)
+train_data_encoded <- predict(dummy_model, newdata = train_data)
+train_data_encoded <- as.data.frame(train_data_encoded)
+train_data_encoded$Status <- train_data$Status
+
+# Applying SMOTE to address Class Imbalance
+smote_result <- SMOTE(train_data_encoded[, -ncol(train_data_encoded)], train_data_encoded$Status, K = 5)
+smote_data_combined <- as.data.frame(smote_result$data)
+colnames(smote_data_combined) <- colnames(train_data_encoded)
+smote_data_combined$Status <- as.factor(smote_data_combined$Status)
+
+train_data <- smote_data_combined
+
+test_data_encoded <- predict(dummy_model, newdata = test_data)
+test_data_encoded <- as.data.frame(test_data_encoded)
+
+missing_cols <- setdiff(colnames(train_data_encoded), colnames(test_data_encoded))
+if (length(missing_cols) > 0) {
+  for (col in missing_cols) {
+    test_data_encoded[[col]] <- 0
+  }
+}
+test_data_encoded <- test_data_encoded[, colnames(train_data_encoded)]
+```
+
+### Logistic Regression
+
+```{r logistic_regression}
+logistic_model <- multinom(Status ~ ., data = train_data)
+logistic_preds <- predict(logistic_model, newdata = test_data_encoded, type = "class")
+logistic_cm <- confusionMatrix(logistic_preds, test_data$Status)
+logistic_accuracy <- logistic_cm$overall["Accuracy"]
+print(paste("Logistic Regression Accuracy:", round(logistic_accuracy, 4)))
+```
+
+### XGBoost Model
+
+```{r xgboost_model}
+train_matrix <- model.matrix(Status ~ ., data = train_data)[, -1]
+test_matrix <- model.matrix(Status ~ ., data = test_data_encoded)[, -1]
+dtrain <- xgb.DMatrix(data = train_matrix, label = as.numeric(train_data$Status) - 1)
+dtest <- xgb.DMatrix(data = test_matrix, label = as.numeric(test_data$Status) - 1)
+
+# Tring to apply XGBoost Model on the SMOTE data
+xgb_model <- xgboost(data = dtrain, max_depth = 4, eta = 0.1, nrounds = 100, 
+                     objective = "multi:softmax", num_class = length(levels(train_data$Status)), verbose = 0)
+
+# Predicting with XGBoost
+xgb_preds <- predict(xgb_model, newdata = dtest)
+xgb_preds <- factor(levels(train_data$Status)[xgb_preds + 1], levels = levels(test_data$Status))
+xgb_cm <- confusionMatrix(xgb_preds, test_data$Status)
+xgb_accuracy <- xgb_cm$overall["Accuracy"]
+print(paste("XGBoost Accuracy:", round(xgb_accuracy, 4)))
+```
+
+### Model Comparison
+
+```{r model_comparison}
+print("Model Accuracies:")
+print(paste("Logistic Regression:", round(logistic_accuracy, 4)))
+print(paste("XGBoost:", round(xgb_accuracy, 4)))
+```
